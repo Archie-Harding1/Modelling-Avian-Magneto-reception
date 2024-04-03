@@ -1,0 +1,204 @@
+print('Start')
+
+#Import modules
+
+import tensorflow as tf
+import os 
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from PIL import Image
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import Sequential #good for one input and one output
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout #conv2D is CNN layer
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.metrics import Precision, Recall, BinaryAccuracy
+from sklearn.metrics import confusion_matrix
+
+print('Modules imported')
+
+#Define directories
+
+data_dir= '/home/spinphys/Archie/VM_4_classes'
+
+log_dir= '/home/spinphys/Archie/logs'
+
+output_dir = '/home/spinphys/Archie/model_outputs'
+
+folders = os.listdir(data_dir) # Folders act as the class
+
+Image_size = (348,348)
+Batch_size = 32 
+
+#Import and split data
+
+data = tf.keras.utils.image_dataset_from_directory(data_dir, image_size = Image_size, batch_size = Batch_size, label_mode= 'categorical', color_mode= 'grayscale') #this defines batch size and image size as well
+data_iterator = data.as_numpy_iterator()
+batch = data_iterator.next() #accessing the data pipeline #everytime you run this it gets another batch
+
+shuffled_data = data.shuffle(buffer_size=3) #shuffle data
+scaled_data = shuffled_data.map(lambda x,y: (x/255,y)) #x are images
+
+scaled_batch = data.as_numpy_iterator().next()
+
+train_size = int(len(scaled_data)*.7)
+val_size = int(len(scaled_data)*.2)
+test_size = int(len(scaled_data)*.1) 
+
+total = train_size + val_size + test_size
+
+print('train =',train_size, 'val =',val_size, 'test =',test_size, 'total =',total)
+
+# Shuffle data
+train = scaled_data.take(train_size) 
+val = scaled_data.skip(train_size).take(val_size)
+test = scaled_data.skip(train_size+val_size).take(test_size)
+
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir = log_dir) #helps you vary hyperparameters
+
+#Define labels of test data 
+test_labels = np.concatenate([y for x, y in test], axis=0)
+
+print('Data ready')
+
+#Function for creating CNN
+def CNN(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir):
+    """
+    Function to create the convolutional neural networks 
+    Inputs:
+    C = number of convolutional layers, int
+    num_clusses = number of convolutional layers, int
+    Ep = number of training epochs, int
+    F = number of convolutional filters, array with dimension [1, C]
+    K = dimension of convolutional kernel [K,K] , int
+    Im = dimension of square image [Im, Im], int
+    Cl = number of colour channels, int
+    data_dir = path to data directory
+    log_dir = path to dlogata directory
+    output_dir = path to output directory
+
+    Output:
+    model = trained model
+    hist_csv = csv file of how accuracy and loss changed during training
+    summary_txt_file = txt file of the model architecture
+    """
+    os.chdir(data_dir)
+    
+    model = Sequential() #creates model
+
+    for i in range(0,C,1):   
+        model.add(Conv2D(filters = F[i], padding='same', kernel_size = (K[i],K[i]), strides = 1, activation = 'relu', input_shape = (Im,Im,Cl)))
+        model.add(MaxPooling2D())
+
+    model.add(Flatten()) 
+    model.add(Dense(num_classes,activation='softmax'))
+    
+    model.compile('adam', loss='categorical_crossentropy', metrics = ['accuracy']) # optimiser = adam,
+ 
+    #Early stopping after loss increases 3 times in a row
+    early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True) 
+    
+    hist = model.fit(train, epochs=Ep, validation_data=val, callbacks=[tensorboard_callback, early_stopping]) #fit is training 
+    
+    os.chdir(log_dir)
+    
+    hist_df = pd.DataFrame(hist.history)
+    
+    F_string = result_string = '_'.join(map(str, F)) #Converts F to string for naming
+    
+    K_string = result_string = '_'.join(map(str, K)) #Converts K to string for naming
+    
+    os.chdir(output_dir)
+    
+    hist_csv_file = f'history_C{C}_N{num_classes}_Ep{Ep}_F{F_string}_K{K_string}.csv'
+    hist_df.to_csv(hist_csv_file, index=False) # create accuracy csv file
+    
+    
+    summary_txt_file = f'summary_C{C}_N{num_classes}_Ep{Ep}_F{F_string}_K{K_string}.txt'
+    with open(summary_txt_file, 'w') as f:
+
+        model.summary(print_fn=lambda x: f.write(x + '\n'))
+    # create model summary txt file
+    
+    #Save model
+    model.save(os.path.join(output_dir, f'model_C{C}_N{num_classes}_Ep{Ep}_F{F_string}_K{K_string}.keras'))
+    
+    return model
+
+print('Function defined')
+
+def evalulation2(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir,test_predictions, test_labels):
+    """
+    Function to evaluate the convolutional neural networks 
+    Inputs:
+    C = number of convolutional layers, int
+    num_clusses = number of convolutional layers, int
+    Ep = number of training epochs, int
+    F = number of convolutional filters, array with dimension [1, C]
+    K = dimension of convolutional kernel [K,K] , int
+    Im = dimension of square image [Im, Im], int
+    Cl = number of colour channels, int
+    output_dir = path to output directory
+    test_predictions = array of models predictions, array
+    test_labels = array of true labels of test data set, array
+
+    Output:
+    conf_df = data frame of confusion matrix
+    """
+    
+    #define labels and predictions
+    test_labels_int = np.argmax(test_labels, axis=1)
+    test_predictions_int = np.argmax(test_predictions, axis=1)
+    
+    #define confusion matrix
+    confmat = confusion_matrix(test_labels_int, test_predictions_int, normalize='true')
+    
+    conf_df = pd.DataFrame(confmat)
+    
+    F_string = result_string = '_'.join(map(str, F))
+    
+    K_string = result_string = '_'.join(map(str, K))
+    
+    conf_file = f'confusion_C{C}_N{num_classes}_Ep{Ep}_F{F_string}_K{K_string}.csv'
+    conf_df.to_csv(os.path.join(output_dir, conf_file), index=False)
+    
+    print('Confusion matrix defined')
+
+
+C = 3
+num_classes = 4
+Ep = 30
+F = [2,4,2]
+K = np.array([3,3,3])
+Im = 348
+Cl = 1 
+
+Model_2 = CNN(C, num_classes, Ep, F, K, Im, Cl, data_dir,log_dir, output_dir)
+
+test_predictions_2 = Model_2.predict(test)
+
+evalulation2(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir,test_predictions_2, test_labels)
+
+
+F = [4,8,4]
+
+Model_4 = CNN(C, num_classes, Ep, F, K, Im, Cl, data_dir,log_dir, output_dir)
+
+test_predictions_4 = Model_4.predict(test)
+
+evalulation2(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir,test_predictions_4, test_labels)
+
+F = [8,16,8]
+
+Model_8 = CNN(C, num_classes, Ep, F, K, Im, Cl, data_dir,log_dir, output_dir)
+
+test_predictions_8 = Model_8.predict(test)
+
+evalulation2(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir,test_predictions_8, test_labels)
+
+F = [16,32,16]
+
+test_predictions_16 = Model_16.predict(test)
+
+evalulation2(C, num_classes, Ep, F, K, Im, Cl, data_dir, log_dir, output_dir,test_predictions_16, test_labels)
+

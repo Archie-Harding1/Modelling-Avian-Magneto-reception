@@ -1,0 +1,167 @@
+print('Start')
+
+#Import modules
+import os # for creating files and directories
+import numpy as np # for implementing mathematical functions
+from numpy.linalg import inv, norm #for finding the inverse and normals of matrices
+import matplotlib.pyplot as plt # for plotting the images 
+import scipy #for implementing scientific functions
+from scipy.special import lpmv #for using the lagrangian function
+from scipy.spatial.transform import Rotation as rot #for using the rotation matrices
+
+
+print('Modules Imported')
+
+def vismodgen(heading,pitch,roll, B, cols, rows,fig_length,DPI):
+    """
+    Function to generate a visual modulation matrix 
+    
+    Inputs:
+    Heading: Integer: 0-360 degrees (anticlockwise)
+    Pitch: Integer: -45 to 45 degrees (anticlockwise)
+    Roll: Integer: -45 to 45 degrees (anticlockwise)
+    B = Numerical array: Magnetic field strength in nt given by [East, North, Up]
+    Cols = Integer: Vertical dimension of the matrix 
+    Rows = Integer: Horizontal dimension of the matrix
+    fig_length = Integer: Size of square image
+    DPI = float: Dots per inch for the image
+    
+    Outputs: PNG of visual modulation pattern
+    
+    """
+
+    degrees = np.pi / 180 #Conversion factor 
+    x, y, z = np.eye(3) #defining axes
+    
+    heading_rad = np.radians(heading)
+    pitch_rad = np.radians(pitch)
+    roll_rad = np.radians(roll)
+    
+    # we initiate the motion for the camera looking North
+    # I.e. the camera vectors are: V_0 = y, L_0 = -x, U_0 = z in the world coordinate system
+    v0 = y
+    l0 = -x
+    u0 = z
+    
+    # 1) rotate camera around world z to establish heading (actually -z, such that the headings 0, 90, 180, 270 corresponds to N, E, S, W)
+    Rc1 = rot.from_rotvec(-heading_rad * z).as_matrix()
+
+    # 2) rotate camera about new Right (i.e. Rc1 applied to initial Right = x) direction to realize pitch
+    Rc2 = rot.from_rotvec(pitch_rad * (Rc1 @ x)).as_matrix()
+
+    # 3) realize roll by rotating camera around the view vector as resulting from the previous rotations from the initial view (i.e. North = y)
+    Rc3 = rot.from_rotvec(roll_rad * (Rc2 @ Rc1 @ y)).as_matrix()
+
+    # Combined rotation
+    Rc123 = Rc3 @ Rc2 @ Rc1
+
+    # View vector of rotated camera in world frame
+    v = Rc123 @ v0
+
+    # Left vector of rotated camera
+    l = Rc123 @ l0
+
+    # Up vector of rotated camera
+    u = Rc123 @ u0
+
+    R = np.array([l, u, v])
+    
+    View = inv(R) @ [0,0,1] #[E, N, UP]
+
+    B_n = R @ B
+    norm = np.linalg.norm(B_n) 
+    B_n = B_n/norm #normlaising 
+    
+    #Defining the angle theta between the ray of light and the magnetic field vector
+
+    x_I = -(-np.arange(cols) + cols/2)/(cols/(4*np.sqrt(3)))
+    y_I = -(-np.arange(rows) + rows/2)/(rows/(4*np.sqrt(3)))
+    x_B, y_B, z_B = B_n
+    X_I, Y_I = np.meshgrid(x_I, y_I)
+    R_I = np.sqrt(X_I**2 + Y_I**2)
+    cos_theta = ((X_I*x_B) + (Y_I*y_B) + ((R_I/2)**2 - 1)*z_B)/((R_I/2)**2 + 1)
+    
+    S = 3 #Maximum number of spherical harmonics that contribute to the VM
+    
+    path = '/home/spinphys/Archie'
+    
+    os.chdir(path)
+
+    
+    A = np.loadtxt('rpm.csv', delimiter=',') #imoport file of SPH weightings and L values
+
+    L = A[0:S,0] #Matrix of L values
+    W = A[0:S,1] #Matrix of weightings
+
+    legendre_values = [lpmv(0, n, cos_theta) for n in L] #calculate legendre values for cos_theta
+    
+    #calculate yield
+    Yield = 0
+    for n in range(S):
+        Yield += W[n] * legendre_values[n]
+    
+    #Normalise yield
+    mi = np.min(Yield) #minimum value of the yields
+    ma = np.max(Yield) #maximum value of the yields
+
+    V = (Yield - mi) / (ma - mi)  #making the values range between 0 and 1 # (-m / mx -m)
+    
+    heading = heading_rad / degrees # heading in degrees
+    
+    #Plot VM pattern
+    fig, ax = plt.subplots(1, 1)
+    im = ax.pcolormesh(X_I,Y_I,V, cmap = 'Greys') #You can add cmap = 'Blues' here to get it blue
+    ax.set_aspect('equal', 'box')
+    ax.set(xticklabels=[]) 
+    ax.set(yticklabels=[]) #getting rid of the labels for the x and y pixels
+    ax.tick_params(bottom=False)
+    ax.tick_params(left = False) #getting rid of the ticks for the x and y pixels
+    ax.axis('off')
+    fig.set_size_inches(fig_length,fig_length)
+    plt.rcParams['savefig.dpi'] = DPI
+    plt.tight_layout()
+    path = './Images/'
+    
+    os.chdir(path)
+    
+    heading = round(heading)
+    
+    heading = format(heading, '03d')
+    
+    title = f'VM_H{heading}_P{pitch}_R0.png'
+    
+    
+    plt.savefig(title,bbox_inches='tight',pad_inches = 0,dpi = DPI)
+    
+    plt.close()
+    
+
+    return heading
+
+print('Function defined')
+
+B = np.array([-164.6 , 20025.0 , -44362.9]) # in nT for Exeter
+
+#Size of visual Modulation Pattern
+cols = 720 #amount of pixels (X)
+rows = 720 #amount of pixels (Y)
+
+fig_length = 5
+
+DPI = 74.25
+
+print('Parameters defined')
+
+plt.close("all") #fresh start
+
+results = []
+
+
+Roll = 0
+
+pitch = 0
+for heading in range(0,360,1):
+    vismodgen(heading,pitch,Roll,B,cols,rows,fig_length,DPI)
+
+    print(heading,pitch)
+
